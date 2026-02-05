@@ -1,0 +1,17 @@
+{
+  "name": "Flux Action",
+  "short_name": "FluxAction",
+  "description": "Gerenciador de Fluxos N8N",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#242424",
+  "theme_color": "#646cff",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
