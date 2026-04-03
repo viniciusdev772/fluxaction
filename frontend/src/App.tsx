@@ -22,25 +22,21 @@ function App() {
         <div className="container flex h-14 max-w-screen-2xl items-center justify-between px-4 md:px-8">
           <div className="flex items-center gap-2">
             <img src="/favicon.svg" alt="Flux Action Logo" className="h-6 w-6" />
-            <span className="text-lg font-bold tracking-tight">Flux Action</span>
+            <span className="text-base font-bold tracking-tight sm:text-lg">Flux Action</span>
           </div>
-          <p className="text-sm text-muted-foreground hidden sm:block">Gerenciador de Fluxos n8n</p>
+          {isConfigured ? (
+            <div className="max-w-[56vw] sm:max-w-none">
+              <Settings compact />
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground hidden sm:block">Gerenciador de Fluxos n8n</p>
+          )}
         </div>
       </header>
 
       <main className="container max-w-screen-xl mx-auto py-6 px-4 md:px-8 md:py-10">
         {isConfigured ? <WorkflowList /> : <div className="max-w-md mx-auto mt-10"><Settings /></div>}
       </main>
-
-      {isConfigured && (
-        <footer className="border-t border-border/40 bg-background/95 py-6 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <div className="container flex flex-col items-center justify-between gap-4 px-4 md:px-8 md:flex-row">
-            <div className="w-full max-w-md">
-              <Settings />
-            </div>
-          </div>
-        </footer>
-      )}
     </div>
   )
 }

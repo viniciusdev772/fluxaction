@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type HTMLAttributes, type AnchorHTMLAttributes, type LiHTMLAttributes, type OlHTMLAttributes, type TableHTMLAttributes, type TdHTMLAttributes, type ThHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
 import { Bot, RefreshCw, Save, Sparkles, X } from 'lucide-react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { n8nApi } from '../services/n8nApi'
 import type { Workflow, WorkflowNode } from '../types/n8n'
 import { Button } from './ui/button'
@@ -18,6 +20,11 @@ interface AiAgentDraft {
   modelLabel: string
   systemMessage: string
   originalSystemMessage: string
+}
+
+interface StatusDialogState {
+  tone: 'success' | 'error' | 'info'
+  message: string
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
@@ -142,6 +149,96 @@ const createDraft = (workflow: Workflow, node: WorkflowNode): AiAgentDraft => {
   }
 }
 
+const markdownComponents = {
+  a: ({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a
+      {...props}
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="text-primary underline underline-offset-4"
+    >
+      {children}
+    </a>
+  ),
+  p: ({ children, ...props }: HTMLAttributes<HTMLParagraphElement>) => (
+    <p {...props} className="leading-6 [&:not(:last-child)]:mb-3">
+      {children}
+    </p>
+  ),
+  ul: ({ children, ...props }: HTMLAttributes<HTMLUListElement>) => (
+    <ul {...props} className="mb-3 list-disc space-y-1 pl-5">
+      {children}
+    </ul>
+  ),
+  ol: ({ children, ...props }: OlHTMLAttributes<HTMLOListElement>) => (
+    <ol {...props} className="mb-3 list-decimal space-y-1 pl-5">
+      {children}
+    </ol>
+  ),
+  li: ({ children, ...props }: LiHTMLAttributes<HTMLLIElement>) => (
+    <li {...props} className="leading-6">
+      {children}
+    </li>
+  ),
+  code: ({ children, className, ...props }: HTMLAttributes<HTMLElement>) => (
+    <code
+      {...props}
+      className={`rounded bg-secondary/70 px-1.5 py-0.5 font-mono text-[0.9em] ${className || ''}`}
+    >
+      {children}
+    </code>
+  ),
+  pre: ({ children, ...props }: HTMLAttributes<HTMLPreElement>) => (
+    <pre
+      {...props}
+      className="mb-3 overflow-x-auto rounded-xl border border-border/60 bg-background p-3 text-sm"
+    >
+      {children}
+    </pre>
+  ),
+  blockquote: ({ children, ...props }: HTMLAttributes<HTMLElement>) => (
+    <blockquote
+      {...props}
+      className="mb-3 border-l-2 border-primary/40 pl-4 italic text-muted-foreground"
+    >
+      {children}
+    </blockquote>
+  ),
+  h1: ({ children, ...props }: HTMLAttributes<HTMLHeadingElement>) => (
+    <h1 {...props} className="mb-3 text-xl font-semibold tracking-tight">
+      {children}
+    </h1>
+  ),
+  h2: ({ children, ...props }: HTMLAttributes<HTMLHeadingElement>) => (
+    <h2 {...props} className="mb-3 text-lg font-semibold tracking-tight">
+      {children}
+    </h2>
+  ),
+  h3: ({ children, ...props }: HTMLAttributes<HTMLHeadingElement>) => (
+    <h3 {...props} className="mb-2 text-base font-semibold tracking-tight">
+      {children}
+    </h3>
+  ),
+  table: ({ children, ...props }: TableHTMLAttributes<HTMLTableElement>) => (
+    <div className="mb-3 overflow-x-auto">
+      <table {...props} className="w-full border-collapse text-sm">
+        {children}
+      </table>
+    </div>
+  ),
+  th: ({ children, ...props }: ThHTMLAttributes<HTMLTableCellElement>) => (
+    <th {...props} className="border border-border/60 bg-secondary/40 px-2 py-2 text-left font-medium">
+      {children}
+    </th>
+  ),
+  td: ({ children, ...props }: TdHTMLAttributes<HTMLTableCellElement>) => (
+    <td {...props} className="border border-border/60 px-2 py-2 align-top">
+      {children}
+    </td>
+  ),
+}
+
 export function AiAgentEditor({ workflowId, onClose }: AiAgentEditorProps) {
   const [workflow, setWorkflow] = useState<Workflow | null>(null)
   const [drafts, setDrafts] = useState<AiAgentDraft[]>([])
@@ -150,12 +247,12 @@ export function AiAgentEditor({ workflowId, onClose }: AiAgentEditorProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [statusDialog, setStatusDialog] = useState<StatusDialogState | null>(null)
 
   const loadWorkflow = async () => {
     setIsLoading(true)
     setError(null)
-    setSuccessMessage(null)
+    setStatusDialog(null)
 
     try {
       const result = await n8nApi.getWorkflow(workflowId)
@@ -221,13 +318,16 @@ export function AiAgentEditor({ workflowId, onClose }: AiAgentEditorProps) {
   const handleSave = async () => {
     setIsSaving(true)
     setError(null)
-    setSuccessMessage(null)
+    setStatusDialog(null)
 
     try {
       const changedVisibleDrafts = visibleDrafts.filter(draft => draft.systemMessage !== draft.originalSystemMessage)
 
       if (changedVisibleDrafts.length === 0) {
-        setSuccessMessage('Nenhuma alteracao pendente para salvar')
+        setStatusDialog({
+          tone: 'info',
+          message: 'Nenhuma alteracao pendente para salvar',
+        })
         return
       }
 
@@ -247,10 +347,17 @@ export function AiAgentEditor({ workflowId, onClose }: AiAgentEditorProps) {
         const filtered = prev.filter(key => allowedKeys.has(key))
         return filtered.length > 0 ? filtered : nextDrafts.map(draft => draft.key)
       })
-      setSuccessMessage('Prompt do AI Agent atualizado no n8n')
+      setStatusDialog({
+        tone: 'success',
+        message: 'System message atualizado no n8n',
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Falha ao salvar alterações'
       setError(message)
+      setStatusDialog({
+        tone: 'error',
+        message,
+      })
     } finally {
       setIsSaving(false)
     }
@@ -291,12 +398,6 @@ export function AiAgentEditor({ workflowId, onClose }: AiAgentEditorProps) {
           {error && (
             <div className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}
-            </div>
-          )}
-
-          {successMessage && (
-            <div className="mt-4 rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600">
-              {successMessage}
             </div>
           )}
 
@@ -375,15 +476,43 @@ export function AiAgentEditor({ workflowId, onClose }: AiAgentEditorProps) {
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">System Message</label>
-                    <textarea
-                      value={draft.systemMessage}
-                      onChange={event => updateDraft(draft.key, 'systemMessage', event.target.value)}
-                      rows={8}
-                      className="min-h-[220px] w-full rounded-md border border-input bg-background px-3 py-3 text-sm leading-6 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      placeholder="Mensagem de sistema para controlar o comportamento do agente"
-                    />
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium">System Message</label>
+                        <span className="text-xs text-muted-foreground">Markdown suportado</span>
+                      </div>
+                      <textarea
+                        value={draft.systemMessage}
+                        onChange={event => updateDraft(draft.key, 'systemMessage', event.target.value)}
+                        rows={10}
+                        className="min-h-[240px] w-full rounded-md border border-input bg-background px-3 py-3 text-sm leading-6 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        placeholder="Mensagem de sistema para controlar o comportamento do agente"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium">Preview</label>
+                        <span className="text-xs text-muted-foreground">Renderizacao segura</span>
+                      </div>
+                      <div className="min-h-[240px] rounded-md border border-border/60 bg-card/50 px-4 py-3 text-sm">
+                        {draft.systemMessage.trim() ? (
+                          <div className="max-w-none text-sm text-foreground">
+                            <Markdown
+                              remarkPlugins={[remarkGfm]}
+                              components={markdownComponents}
+                            >
+                              {draft.systemMessage}
+                            </Markdown>
+                          </div>
+                        ) : (
+                          <p className="text-muted-foreground">
+                            A previa Markdown do system message aparece aqui.
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -418,6 +547,39 @@ export function AiAgentEditor({ workflowId, onClose }: AiAgentEditorProps) {
           </div>
         </div>
       </Card>
+
+      {statusDialog && (
+        <div className="absolute inset-0 z-[102] flex items-center justify-center bg-black/30 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-border/60 bg-background p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h5 className="text-base font-semibold">
+                  {statusDialog.tone === 'success'
+                    ? 'Salvo'
+                    : statusDialog.tone === 'error'
+                      ? 'Erro'
+                      : 'Aviso'}
+                </h5>
+                <p className="mt-2 text-sm text-muted-foreground">{statusDialog.message}</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setStatusDialog(null)}
+                aria-label="Fechar aviso"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="mt-4 flex justify-end">
+              <Button onClick={() => setStatusDialog(null)}>
+                Entendi
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>,
     document.body
   )
