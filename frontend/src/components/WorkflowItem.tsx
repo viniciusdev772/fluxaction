@@ -6,8 +6,9 @@ import { Card } from './ui/card'
 import { Switch } from './ui/switch'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
-import { Download, AlertCircle, Clock, Tag } from 'lucide-react'
+import { Download, AlertCircle, Clock, Tag, Sparkles } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { AiAgentEditor } from './AiAgentEditor'
 
 interface WorkflowItemProps {
   workflow: Workflow
@@ -17,6 +18,7 @@ interface WorkflowItemProps {
 export function WorkflowItem({ workflow, onStatusChange }: WorkflowItemProps) {
   const [isUpdating, setIsUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isAiEditorOpen, setIsAiEditorOpen] = useState(false)
 
   const handleToggle = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const newState = e.target.checked
@@ -135,6 +137,16 @@ export function WorkflowItem({ workflow, onStatusChange }: WorkflowItemProps) {
             <Download className="w-4 h-4 mr-2" />
             Exportar
           </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsAiEditorOpen(prev => !prev)}
+            className="h-9 px-3 border-border/60 hover:border-primary/50 hover:bg-primary/5 hover:text-primary"
+          >
+            <Sparkles className="mr-2 h-4 w-4" />
+            {isAiEditorOpen ? 'Fechar AI Agent' : 'AI Agent'}
+          </Button>
         </div>
       </div>
 
@@ -146,6 +158,13 @@ export function WorkflowItem({ workflow, onStatusChange }: WorkflowItemProps) {
             {error}
           </div>
         </div>
+      )}
+
+      {isAiEditorOpen && (
+        <AiAgentEditor
+          workflowId={workflow.id}
+          onClose={() => setIsAiEditorOpen(false)}
+        />
       )}
     </Card>
   )

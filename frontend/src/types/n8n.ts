@@ -5,9 +5,19 @@ export interface Workflow {
   createdAt: string
   updatedAt: string
   tags?: Tag[]
-  nodes?: unknown[]
-  connections?: unknown
+  nodes?: WorkflowNode[]
+  connections?: Record<string, unknown>
   settings?: WorkflowSettings
+}
+
+export interface WorkflowNode {
+  id?: string
+  name: string
+  type: string
+  typeVersion?: number
+  position?: [number, number]
+  parameters: Record<string, unknown>
+  credentials?: Record<string, unknown>
 }
 
 export interface Tag {
@@ -41,6 +51,18 @@ export interface WorkflowUpdateRequest {
   active?: boolean
   name?: string
   tags?: string[]
+}
+
+export interface WorkflowDefinitionUpdateRequest {
+  name?: string
+  nodes?: WorkflowNode[]
+  connections?: Record<string, unknown>
+  settings?: WorkflowSettings | Record<string, unknown>
+}
+
+export interface AiAgentSystemMessageUpdate {
+  nodeKey: string
+  systemMessage: string
 }
 
 export interface ApiError {

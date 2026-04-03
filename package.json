@@ -1,0 +1,14 @@
+{
+  "name": "fluxaction-dev",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "concurrently -k -n frontend,backend -c blue,green \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:backend": "sh -c 'BACKEND_ENCRYPTION_KEY=${BACKEND_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef} NODE_ENV=${NODE_ENV:-development} PORT=${PORT:-4000} ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173} nodemon --watch backend --ext js,json --ignore backend/data --exec \"node backend/index.js\"'"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "nodemon": "^3.1.14"
+  }
+}

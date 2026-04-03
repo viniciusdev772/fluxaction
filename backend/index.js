@@ -30,7 +30,7 @@ app.set('trust proxy', 1)
 const corsOptions = {
   origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:8080', 'http://localhost:5173'],
   credentials: true,
-  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
 }
 app.use(cors(corsOptions))
@@ -124,7 +124,23 @@ const BLOCKED_HOSTS = [
   '172.28.', '172.29.', '172.30.', '172.31.', '169.254.',
 ]
 
+const isExplicitlyAllowedDevUrl = (url) => {
+  try {
+    const parsedUrl = new URL(url)
+    return process.env.NODE_ENV !== 'production'
+      && parsedUrl.protocol === 'http:'
+      && parsedUrl.hostname.toLowerCase() === 'localhost'
+      && parsedUrl.port === '5678'
+  } catch {
+    return false
+  }
+}
+
 const isBlockedHost = (url) => {
+  if (isExplicitlyAllowedDevUrl(url)) {
+    return false
+  }
+
   try {
     const hostname = new URL(url).hostname.toLowerCase()
     return BLOCKED_HOSTS.some(blocked => 
@@ -153,6 +169,17 @@ const isValidWorkflowId = (id) => {
   return typeof id === 'string' && id.length > 0 && id.length <= 64 && WORKFLOW_ID_REGEX.test(id)
 }
 
+const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const isAiAgentNode = (node) => {
+  if (!isRecord(node) || typeof node.type !== 'string') {
+    return false
+  }
+
+  const type = node.type.toLowerCase()
+  return type.includes('langchain.agent') || type.includes('toolaiagent') || type.includes('aiagent')
+}
+
 // Metrics tracking
 const metrics = {
   requestsTotal: 0,
@@ -177,7 +204,7 @@ const trackMetric = (endpoint, status) => {
 }
 
 // Fetch from n8n with timeout
-const fetchFromN8n = async ({ serverUrl, apiKey, path, method = 'GET', body, reqLogger }) => {
+const fetchFromN8n = async ({ serverUrl, apiKey, path, method = 'GET', body, reqLogger, apiBasePath = '/api/v1' }) => {
   if (isBlockedHost(serverUrl)) {
     return {
       ok: false,
@@ -189,13 +216,13 @@ const fetchFromN8n = async ({ serverUrl, apiKey, path, method = 'GET', body, req
     }
   }
 
-  const baseUrl = `${normalizeServerUrl(serverUrl)}/api/v1`
+  const baseUrl = `${normalizeServerUrl(serverUrl)}${apiBasePath}`
   const url = `${baseUrl}${path}`
 
   const controller = new AbortController()
   const timeout = setTimeout(() => {
     controller.abort()
-    reqLogger?.warn('Request timeout', { url: url.replace(/\/api\/v1.*/, '/api/v1/***'), timeout: CONFIG.requestTimeoutMs })
+    reqLogger?.warn('Request timeout', { url: url.replace(/\/(?:api\/v1|rest).*/, '/api/***'), timeout: CONFIG.requestTimeoutMs })
   }, CONFIG.requestTimeoutMs)
 
   try {
@@ -598,6 +625,214 @@ const handleDeactivateWorkflow = async (req, res) => {
   }
 }
 
+const handleUpdateWorkflow = async (req, res) => {
+  trackMetric('update_workflow', res.statusCode)
+
+  const { id } = req.params
+
+  if (!isValidWorkflowId(id)) {
+    return res.status(400).json({
+      message: 'ID do workflow inválido',
+      code: 'INVALID_WORKFLOW_ID',
+    })
+  }
+
+  const stored = getConfig()
+
+  if (!stored) {
+    return res.status(400).json({
+      message: 'serverUrl e apiKey são obrigatórios',
+      code: 'MISSING_CREDENTIALS',
+    })
+  }
+
+  const { name, nodes, connections, settings } = req.body || {}
+  const payload = {}
+
+  if (typeof name === 'string') {
+    payload.name = name
+  }
+  if (Array.isArray(nodes)) {
+    payload.nodes = nodes
+  }
+  if (connections && typeof connections === 'object') {
+    payload.connections = connections
+  }
+  if (settings && typeof settings === 'object') {
+    payload.settings = settings
+  }
+
+  if (!payload.name && !payload.nodes && !payload.connections && !payload.settings) {
+    return res.status(400).json({
+      message: 'Nenhum campo atualizável foi enviado',
+      code: 'NO_UPDATABLE_FIELDS',
+    })
+  }
+
+  const { serverUrl, apiKey } = stored
+
+  try {
+    const result = await fetchFromN8n({
+      serverUrl,
+      apiKey,
+      path: `/workflows/${id}`,
+      method: 'PUT',
+      body: payload,
+      reqLogger: req.logger,
+    })
+
+    if (!result.ok) {
+      return res.status(result.status).json(result.data)
+    }
+
+    syncWorkflows()
+    req.logger.info('Workflow updated', { workflowId: id })
+    return res.json(result.data)
+  } catch (error) {
+    req.logger.error('Error updating workflow', { error: error.message, workflowId: id })
+    return res.status(502).json({
+      message: 'Falha ao conectar com o servidor n8n',
+      code: 'N8N_UNREACHABLE',
+    })
+  }
+}
+
+const handleStrictAiSystemMessageUpdate = async (req, res) => {
+  trackMetric('update_ai_system_message', res.statusCode)
+
+  const { id } = req.params
+
+  if (!isValidWorkflowId(id)) {
+    return res.status(400).json({
+      message: 'ID do workflow inválido',
+      code: 'INVALID_WORKFLOW_ID',
+    })
+  }
+
+  const stored = getConfig()
+
+  if (!stored) {
+    return res.status(400).json({
+      message: 'serverUrl e apiKey são obrigatórios',
+      code: 'MISSING_CREDENTIALS',
+    })
+  }
+
+  const updates = Array.isArray(req.body?.updates) ? req.body.updates : []
+
+  if (updates.length === 0) {
+    return res.status(400).json({
+      message: 'Nenhuma atualização de AI Agent foi enviada',
+      code: 'NO_AI_AGENT_UPDATES',
+    })
+  }
+
+  for (const update of updates) {
+    if (!isRecord(update) || typeof update.nodeKey !== 'string' || typeof update.systemMessage !== 'string') {
+      return res.status(400).json({
+        message: 'Payload inválido para atualização de AI Agent',
+        code: 'INVALID_AI_AGENT_UPDATE',
+      })
+    }
+  }
+
+  const { serverUrl, apiKey } = stored
+
+  try {
+    const currentWorkflowResult = await fetchFromN8n({
+      serverUrl,
+      apiKey,
+      path: `/workflows/${id}`,
+      reqLogger: req.logger,
+    })
+
+    if (!currentWorkflowResult.ok) {
+      return res.status(currentWorkflowResult.status).json(currentWorkflowResult.data)
+    }
+
+    const currentWorkflow = currentWorkflowResult.data
+
+    const updateMap = new Map(updates.map(update => [update.nodeKey, update.systemMessage]))
+    let updatedNodeCount = 0
+
+    const updatedNodes = (currentWorkflow.nodes || []).map(node => {
+      const nodeKey = typeof node.id === 'string' ? node.id : node.name
+      if (!updateMap.has(nodeKey)) {
+        return node
+      }
+
+      if (!isAiAgentNode(node)) {
+        throw new Error(`INVALID_AI_AGENT_TARGET:${nodeKey}`)
+      }
+
+      const nextSystemMessage = updateMap.get(nodeKey)
+      const nextParameters = isRecord(node.parameters) ? { ...node.parameters } : {}
+      const currentOptions = isRecord(nextParameters.options) ? { ...nextParameters.options } : {}
+
+      if (nextSystemMessage.trim()) {
+        currentOptions.systemMessage = nextSystemMessage
+      } else {
+        delete currentOptions.systemMessage
+      }
+
+      if (Object.keys(currentOptions).length > 0) {
+        nextParameters.options = currentOptions
+      } else {
+        delete nextParameters.options
+      }
+
+      updatedNodeCount++
+
+      return {
+        ...node,
+        parameters: nextParameters,
+      }
+    })
+
+    if (updatedNodeCount !== updates.length) {
+      return res.status(400).json({
+        message: 'Um ou mais AI Agents selecionados nao foram encontrados no workflow atual',
+        code: 'AI_AGENT_NOT_FOUND',
+      })
+    }
+
+    const putResult = await fetchFromN8n({
+      serverUrl,
+      apiKey,
+      path: `/workflows/${id}`,
+      method: 'PUT',
+      body: {
+        name: currentWorkflow.name,
+        nodes: updatedNodes,
+        connections: currentWorkflow.connections || {},
+        settings: {},
+      },
+      reqLogger: req.logger,
+    })
+
+    if (!putResult.ok) {
+      return res.status(putResult.status).json(putResult.data)
+    }
+
+    syncWorkflows()
+    req.logger.info('AI Agent system message updated', { workflowId: id, updatedNodeCount })
+    return res.json(putResult.data)
+  } catch (error) {
+    if (typeof error.message === 'string' && error.message.startsWith('INVALID_AI_AGENT_TARGET:')) {
+      return res.status(400).json({
+        message: 'Um dos itens selecionados nao e um node de AI Agent',
+        code: 'INVALID_AI_AGENT_TARGET',
+      })
+    }
+
+    req.logger.error('Error updating AI Agent system message', { error: error.message, workflowId: id })
+    return res.status(502).json({
+      message: 'Falha ao conectar com o servidor n8n',
+      code: 'N8N_UNREACHABLE',
+    })
+  }
+}
+
 app.post('/api/v1/workflows', workflowBodyLimit, handleListWorkflows)
 
 app.get('/api/v1/workflows/:id', async (req, res) => {
@@ -647,6 +882,8 @@ app.get('/api/v1/workflows/:id', async (req, res) => {
 
 app.post('/api/v1/workflows/:id/activate', csrfProtection, handleActivateWorkflow)
 app.post('/api/v1/workflows/:id/deactivate', csrfProtection, handleDeactivateWorkflow)
+app.put('/api/v1/workflows/:id', workflowBodyLimit, csrfProtection, handleUpdateWorkflow)
+app.patch('/api/v1/workflows/:id/ai-system-message', workflowBodyLimit, csrfProtection, handleStrictAiSystemMessageUpdate)
 
 // Global error handler
 app.use((err, req, res, _next) => {

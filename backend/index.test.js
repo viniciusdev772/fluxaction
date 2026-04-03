@@ -25,7 +25,9 @@ describe('API Integration Tests', () => {
         it('should return 200 and ok:true', async () => {
             const res = await request(app).get('/api/health')
             expect(res.status).toBe(200)
-            expect(res.body).toEqual({ ok: true })
+            expect(res.body.ok).toBe(true)
+            expect(typeof res.body.timestamp).toBe('string')
+            expect(typeof res.body.uptime).toBe('number')
         })
     })
 
@@ -75,10 +77,19 @@ describe('API Integration Tests', () => {
     })
 
     describe('Security - SSRF Protection', () => {
-        it('should block localhost', async () => {
+        it('should allow local n8n on localhost:5678 outside production', async () => {
             const res = await request(app)
                 .post('/api/v1/config')
                 .send({ serverUrl: 'http://localhost:5678', apiKey: 'abc' })
+
+            expect(res.status).toBe(200)
+            expect(res.body).toEqual({ ok: true })
+        })
+
+        it('should block localhost on other ports', async () => {
+            const res = await request(app)
+                .post('/api/v1/config')
+                .send({ serverUrl: 'http://localhost:3000', apiKey: 'abc' })
 
             expect(res.status).toBe(400)
             expect(res.body.code).toBe('BLOCKED_HOST')
@@ -288,6 +299,228 @@ describe('API Integration Tests', () => {
 
             expect(res.status).toBe(200)
             expect(res.body).toEqual(mockWorkflow)
+        })
+
+        it('should update workflow definition via n8n public api', async () => {
+            const updatedWorkflow = {
+                id: '1',
+                name: 'AI Workflow',
+                nodes: [
+                    {
+                        id: 'agent-node',
+                        name: 'AI Agent',
+                        type: '@n8n/n8n-nodes-langchain.agent',
+                        parameters: {
+                            text: 'Summarize the ticket',
+                            options: {
+                                systemMessage: 'You are a precise support agent',
+                                maxIterations: 5,
+                            },
+                        },
+                    },
+                ],
+                connections: {},
+                settings: {},
+            }
+
+            const fetchMock = vi.fn().mockResolvedValue({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(updatedWorkflow)
+            })
+            vi.stubGlobal('fetch', fetchMock)
+
+            const res = await request(app)
+                .put('/api/v1/workflows/1')
+                .send({
+                    name: 'AI Workflow',
+                    nodes: updatedWorkflow.nodes,
+                    connections: {},
+                    settings: {},
+                })
+
+            expect(res.status).toBe(200)
+            expect(res.body).toEqual(updatedWorkflow)
+            expect(fetchMock).toHaveBeenCalledWith(
+                'https://n8n.test.com/api/v1/workflows/1',
+                expect.objectContaining({
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        name: 'AI Workflow',
+                        nodes: updatedWorkflow.nodes,
+                        connections: {},
+                        settings: {},
+                    }),
+                })
+            )
+        })
+
+        it('should update only ai agent system messages in strict mode', async () => {
+            const currentWorkflow = {
+                id: '1',
+                name: 'AI Workflow',
+                nodes: [
+                    {
+                        id: 'agent-node',
+                        name: 'AI Agent',
+                        type: '@n8n/n8n-nodes-langchain.agent',
+                        parameters: {
+                            options: {
+                                systemMessage: 'old prompt',
+                            },
+                        },
+                    },
+                    {
+                        id: 'chat-model',
+                        name: 'OpenAI Chat Model',
+                        type: '@n8n/n8n-nodes-langchain.lmChatOpenAi',
+                        parameters: {
+                            model: {
+                                value: 'gpt-5-mini',
+                            },
+                        },
+                    },
+                ],
+                connections: {
+                    'OpenAI Chat Model': {
+                        ai_languageModel: [[{ node: 'AI Agent', type: 'ai_languageModel', index: 0 }]],
+                    },
+                },
+                settings: {},
+            }
+
+            const updatedWorkflow = {
+                ...currentWorkflow,
+                nodes: [
+                    {
+                        ...currentWorkflow.nodes[0],
+                        parameters: {
+                            options: {
+                                systemMessage: 'new prompt',
+                            },
+                        },
+                    },
+                    currentWorkflow.nodes[1],
+                ],
+            }
+
+            const fetchMock = vi.fn()
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(currentWorkflow),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(updatedWorkflow),
+                })
+            vi.stubGlobal('fetch', fetchMock)
+
+            const res = await request(app)
+                .patch('/api/v1/workflows/1/ai-system-message')
+                .send({
+                    updates: [
+                        {
+                            nodeKey: 'agent-node',
+                            systemMessage: 'new prompt',
+                        },
+                    ],
+                })
+
+            expect(res.status).toBe(200)
+            expect(fetchMock).toHaveBeenNthCalledWith(
+                1,
+                'https://n8n.test.com/api/v1/workflows/1',
+                expect.objectContaining({ method: 'GET' })
+            )
+            expect(fetchMock).toHaveBeenNthCalledWith(
+                2,
+                'https://n8n.test.com/api/v1/workflows/1',
+                expect.objectContaining({
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        name: 'AI Workflow',
+                        nodes: updatedWorkflow.nodes,
+                        connections: currentWorkflow.connections,
+                        settings: {},
+                    }),
+                })
+            )
+        })
+
+        it('should update ai agent system message even when workflow has extra settings', async () => {
+            const currentWorkflow = {
+                id: '1',
+                name: 'AI Workflow',
+                nodes: [
+                    {
+                        id: 'agent-node',
+                        name: 'AI Agent',
+                        type: '@n8n/n8n-nodes-langchain.agent',
+                        parameters: { options: { systemMessage: 'old prompt' } },
+                    },
+                ],
+                connections: {},
+                settings: {
+                    executionOrder: 'v1',
+                    binaryMode: 'separate',
+                },
+            }
+
+            const updatedWorkflow = {
+                ...currentWorkflow,
+                nodes: [
+                    {
+                        ...currentWorkflow.nodes[0],
+                        parameters: { options: { systemMessage: 'new prompt' } },
+                    },
+                ],
+            }
+
+            const fetchMock = vi.fn()
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(currentWorkflow),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(updatedWorkflow),
+                })
+            vi.stubGlobal('fetch', fetchMock)
+
+            const res = await request(app)
+                .patch('/api/v1/workflows/1/ai-system-message')
+                .send({
+                    updates: [
+                        {
+                            nodeKey: 'agent-node',
+                            systemMessage: 'new prompt',
+                        },
+                    ],
+                })
+
+            expect(res.status).toBe(200)
+            expect(fetchMock).toHaveBeenNthCalledWith(
+                2,
+                'https://n8n.test.com/api/v1/workflows/1',
+                expect.objectContaining({
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        name: 'AI Workflow',
+                        nodes: updatedWorkflow.nodes,
+                        connections: {},
+                        settings: {},
+                    }),
+                })
+            )
         })
 
         it('should handle n8n server error', async () => {

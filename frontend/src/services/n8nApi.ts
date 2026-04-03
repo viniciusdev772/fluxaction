@@ -1,4 +1,13 @@
-import type { Workflow, WorkflowListResponse, WorkflowListRequest, WorkflowUpdateRequest, ApiError, AppConfigStatus } from '../types/n8n'
+import type {
+  Workflow,
+  WorkflowListResponse,
+  WorkflowListRequest,
+  WorkflowUpdateRequest,
+  WorkflowDefinitionUpdateRequest,
+  AiAgentSystemMessageUpdate,
+  ApiError,
+  AppConfigStatus
+} from '../types/n8n'
 
 class N8nApiService {
   private csrfToken: string | null = null
@@ -126,6 +135,28 @@ class N8nApiService {
     }
 
     throw new Error('Update not supported on unified v1 API')
+  }
+
+  async updateWorkflowDefinition(id: string, updates: WorkflowDefinitionUpdateRequest): Promise<Workflow> {
+    const response = await fetch(`/api/v1/workflows/${id}`, {
+      method: 'PUT',
+      headers: await this.postHeaders(),
+      credentials: 'include',
+      body: JSON.stringify(updates),
+    })
+
+    return this.handleResponse<Workflow>(response)
+  }
+
+  async updateAiAgentSystemMessages(id: string, updates: AiAgentSystemMessageUpdate[]): Promise<Workflow> {
+    const response = await fetch(`/api/v1/workflows/${id}/ai-system-message`, {
+      method: 'PATCH',
+      headers: await this.postHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ updates }),
+    })
+
+    return this.handleResponse<Workflow>(response)
   }
 
   async activateWorkflow(id: string): Promise<Workflow> {

@@ -125,6 +125,14 @@ Content-Security-Policy: default-src 'self'
 
 ## Desenvolvimento
 
+### App Completo
+```bash
+npm install
+npm run dev       # Frontend em http://localhost:5173 + backend com nodemon em http://localhost:4000
+```
+
+O script da raiz inicia o Vite no frontend e o backend com `nodemon` para hot reload.
+
 ### Frontend
 ```bash
 cd frontend
